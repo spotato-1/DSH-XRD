@@ -1,0 +1,6 @@
+{
+  "python": "C:/Python313/python.exe",
+  "gsas_root": "D:/GSAS-II",
+  "fp2k_root": "D:/FullProf",
+  "cif2pcr_exe": "C:/Program Files (x86)/FullProfAPP/resources/fpsuite/windows/CIFs_to_PCR.exe"
+}

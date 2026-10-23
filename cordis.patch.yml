@@ -1,0 +1,6 @@
+# dsh bundle layer: mount the dsh-xrd (XRD Rietveld refinement workflow) plugin.
+# Replaces dsh-autofp (retired): carries autofp_refine + fullprof-pcr forward,
+# plus the xrd engine/manual/verify tool family and xrd workflow skills.
+- insert:
+    - id: dsh-xrd
+      name: 'dsh-xrd'

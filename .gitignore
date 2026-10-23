@@ -1,0 +1,39 @@
+# Machine-local configuration and credentials
+xrd.local.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python and Node caches
+__pycache__/
+*.py[cod]
+node_modules/
+
+# DSH-XRD runtime state and generated artifacts
+.xrd-progress-*.json
+.xrd-stop*
+review_mechanical_*.json
+review_judgment.md
+workflow_state.json
+xrd_workflow/
+.fp2k-work-*/
+.autofp-work-*/
+*.gpx
+*.lst
+*.prf
+*.sum
+*.out
+
+# Audit and local scratch output
+audit/.work/
+.work/
+output/
+dist/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

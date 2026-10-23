@@ -1,0 +1,36 @@
+{
+  "name": "dsh-xrd",
+  "version": "0.9.1",
+  "description": "Powder-XRD / Rietveld refinement workflow for DeepSeek Harness: 12 native tools (headless FullProf fp2k refinement driver, bounded python engine, GSAS-II ladder with per-phase switches / entry policy / rollback / manual-engine hand-off / >=3-phase AI-editable hook, full-parameter ops, unified export, FullProf fp2k verification, CIF read-edit-build-fetch, phase screening, data I/O incl. Scherrer size and a positional header dump) plus 6 bundled skills and a bundled FullProf fp2k runtime. Wavelength is EXPLICIT-ONLY on the four write entry points (manual / pcr / fp2k / GSAS-II): omit it and the input is untouched. See INTERFACE.md for the authoritative interface contract.",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "keywords": [
+    "xrd",
+    "rietveld",
+    "fullprof",
+    "fp2k",
+    "gsas-ii",
+    "crystallography",
+    "powder-diffraction",
+    "dsh-plugin"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib",
+    "engine",
+    "skills",
+    "third_party",
+    "audit",
+    "INTERFACE.md",
+    "cordis.patch.yml"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "version": "0.8.0",
+  "note": "xrd-workflow §6 附录A 缺陷总表；只读底表，AI 不得加行；表外情形倒回主表（四分类），表外新假设写 defect_table.json 用 X-01… 前缀",
+  "skeleton_note": "本骨架刻意只留 id/family/defect(+reachability)；8 个必需字段的正文在 defect-catalog.md 的各节里（两处真相必漂，故不复制）",
+  "fields_required": ["id", "family", "defect", "structural_form", "xrd_signature", "judge", "params_backend", "pitfall"],
+  "fields_optional": ["reachability", "example", "source"],
+  "rows": [
+    {"id": "D-01", "family": "位点·占位", "defect": "空位"},
+    {"id": "D-02", "family": "位点·占位", "defect": "反位"},
+    {"id": "D-03", "family": "位点·占位", "defect": "混占/取代"},
+    {"id": "D-04", "family": "位点·占位", "defect": "间隙原子"},
+    {"id": "D-05", "family": "位点·占位", "defect": "额外物种(水/羟基/碳酸根/溶剂)"},
+    {"id": "D-06", "family": "位点·占位", "defect": "有序-无序/超胞", "reachability": true},
+    {"id": "D-07", "family": "几何", "defect": "位点劈裂/静态位移"},
+    {"id": "D-08", "family": "几何", "defect": "偏心位移"},
+    {"id": "D-09", "family": "几何", "defect": "配位多面体畸变/倾斜", "reachability": true},
+    {"id": "D-10", "family": "扩展·微结构", "defect": "堆垛层错/位错"},
+    {"id": "D-11", "family": "扩展·微结构", "defect": "微应变"},
+    {"id": "D-12", "family": "扩展·微结构", "defect": "晶粒尺寸效应"},
+    {"id": "D-13", "family": "扩展·微结构", "defect": "孪晶/共生"},
+    {"id": "D-14", "family": "扩展·微结构", "defect": "各向异性展宽"}
+  ],
+  "footnotes": [
+    {"id": "N-01", "name": "层间阳离子混排", "home": ["D-03", "D-02"], "backend": "gsas",
+     "how": "按 D-02 占位守恒方案(conserve_afrac/equiv_afrac)判断与精修；不用手动引擎"},
+    {"id": "N-02", "name": "氧空位有序化", "home": ["D-01", "D-06"], "backend": "gsas",
+     "how": "先按 D-01 判空位，再按 D-06 看是否降对称/建超胞"},
+    {"id": "N-03", "name": "非化学计量整比偏离", "home": ["D-01"], "backend": "gsas",
+     "how": "判占位并与合成/ICP/EDS 输入对照，区分真实非整比与占位假收益"}
+  ],
+  "per_sample_table": {
+    "file": "defect_table.json",
+    "fields": ["id", "defect", "source", "reported", "verdict", "reason", "backend", "geometry_ref", "exec", "status"],
+    "fields_note": "10 字段以 xrd-workflow §6.9 为准；verdict ∈ {适用, 不适用, 待定}；reason 与 status 的不适用/未执行也必须写理由",
+    "id_pattern": "^(D-\\d{2}|X-\\d{2})$",
+    "note": "id 必须存在于 rows（或 X-nn 表外假设，须在报告注明）；排除某维度须按该条 judge 跑过、reason 已写、几何类维度两方案齐全且 geometry_ref 有出处、exec 的 R_before→R_after 齐全，否则 verdict=待定"
+  }
+}
