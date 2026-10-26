@@ -207,6 +207,7 @@ The bundled FullProf binaries remain unchanged third-party files. Their origin, 
 ## If You Are an AI: Follow This Installation Route
 
 Use the following route when the user asks you to install DSH-XRD. Complete the work end to end, report each discovered dependency clearly, and request user approval when the host requires elevated access or an external program must be installed.
+Note: It is recommended to download the complete structured package directly from /releases, which includes a Windows build with all dependencies.
 
 ### 1. Inspect the package
 
