@@ -5,7 +5,7 @@
 import { mkdirSync, rmSync, copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { importRoot, pluginEntry, mockContext, WORK_ROOT, FIXTURES, report } from './_lib.mjs'
+import { importRoot, pluginEntry, mockContext, WORK_ROOT, FIXTURES, report, copyPcrWithProvenance } from './_lib.mjs'
 
 const ENTRY = pluginEntry(importRoot())
 const WORK = join(WORK_ROOT, 'verify_fp2k')
@@ -25,7 +25,10 @@ if (!tool) throw new Error('xrd_verify_fp2k not registered')
 // fp2k resolves the pattern from the name DECLARED inside the pcr, so both the
 // pcr stem and the declared data name must be present next to each other.
 const pcr = join(WORK, 'Y2O3.pcr')
-copyFileSync(SRC_PCR, pcr)
+// 0.10.0 entry gate: stage the fixture's provenance sidecar with it, or xrd_verify_fp2k refuses
+// the pcr before fp2k ever runs. (An untraceable pcr is refused on purpose — that has its own
+// reverse control in gate-cases.mjs; this suite is about what fp2k reports.)
+copyPcrWithProvenance(SRC_PCR, pcr)
 copyFileSync(DAT, join(WORK, 'Y2O3.dat'))
 
 const exec = { agent: { session: { header: { cwd: WORK } } } }

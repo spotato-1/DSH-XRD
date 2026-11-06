@@ -38,11 +38,11 @@ them, and records the hashes above. We did not modify FullProf; the AutoFP
 
 ## Licensing — read before redistributing
 
-- The complete `dsh-xrd` repository is distributed under **GNU GPL v3**; see
-  the root [`LICENSE`](../../LICENSE).
+- The complete `dsh-xrd` repository is distributed under **GNU GPL-3.0**; see
+  the root [`LICENSE`](../../LICENSE) and `package.json`.
 - The files **in this directory** are unchanged third-party FullProf binaries
-  distributed with the same GPL-3 licence text in this directory. AutoFP's
-  licence file states GPL-3, which is the version relied on here.
+  distributed with the GPL-3 licence text stored beside them. AutoFP's licence
+  file states GPL-3, which is the version relied on here.
 - GPL-3 (§4/§6) requires that recipients of the binaries receive the licence text
   and can obtain the corresponding source. The source is available from
   FullProf's author — **<https://www.ill.eu/sites/fullprof/>**

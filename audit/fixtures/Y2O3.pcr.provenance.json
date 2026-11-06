@@ -1,0 +1,22 @@
+{
+  "created_at": "2026-11-06T15:00:14Z",
+  "descendants": [],
+  "generator": {
+    "name": "cif_to_pcr",
+    "sha256": "331a932a5d73e7cdedc890404a4acaef42807be9b52e192236dc7cf4bb290a31",
+    "version": "audit-fixture"
+  },
+  "kind": "generated",
+  "options": {},
+  "pcr": {
+    "mtime": 1789844715.5949204,
+    "path": "Y2O3.pcr",
+    "sha256": "3595ed5975f78205959f0cad8c6336c92720f8a3c1e7cb83853390b3764bb743",
+    "size": 4241
+  },
+  "source_cif": {
+    "path": "Y2O3.cif",
+    "sha256": "0531f54f03fcda3bbb6f5f279d1ffa5383d947dc5b5e046ce2c26e75721f421e"
+  },
+  "version": 1
+}

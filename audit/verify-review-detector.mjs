@@ -620,6 +620,153 @@ console.log('\n== 注入消息必须是完整的 UserMessage（宿主 inbox 契�
     'the dynamic `invalid` text really exists (the exception above is not a loophole)')
 }
 
+// ── 13. 0.10.2（B 组）：两代宿主入口 ────────────────────────────────────────
+// 病征：新代宿主 dsh-subagent 0.2.1-rc.2 把 `start(name, request)` 换成
+// `startActivation(spec)`，而旧探测写死 `typeof subagents.start === 'function'` ⇒ 审查
+// 链路静默 skipped、不崩不告警。这里用**只暴露新入口**的假 service 证明它真的会跑。
+console.log('\n== 13. both host generations start a review (0.10.2 / group B) ==')
+{
+  // 13a 新代：只有 startActivation
+  const d = fresh('host-new')
+  const calls = []
+  const ctxNew = {
+    get: (name) => name !== 'subagents' ? null : {
+      getProvider: () => ({ name: 'spawn' }),
+      startActivation: async (spec) => {
+        calls.push(spec)
+        return { childId: 'c-new', result: Promise.resolve({ output: [{ type: 'text', text: 'C' }] }), dispose: async () => {} }
+      },
+    },
+  }
+  const agent = mkAgent('running')
+  for (let i = 1; i <= 3; i++) onGsasRound({ dir: d, agent, wR: 13 }, { ctx: ctxNew, pluginRoot: ROOT })
+  await new Promise(r => setTimeout(r, 80))
+  check(calls.length === 1, 'NEW host (startActivation only): the review really starts', 'calls=' + calls.length)
+  {
+    const spec = calls[0] || {}
+    check(spec.provider === 'spawn' && spec.label === '复杂情况审查', 'spec carries provider + top-level label')
+    check(spec.request && spec.request.parent === agent, 'spec.request.parent is the calling agent (host verifies identity)')
+    check(spec.delivery === 'caller', 'delivery=caller ⇒ no duplicate settlement notice in the parent conversation')
+    check(!!spec.signal && typeof spec.signal.aborted === 'boolean', 'spec.signal is passed (the new host calls throwIfAborted unconditionally)')
+    check(!!spec.request && !('toolFilter' in spec.request), 'no toolFilter is sent to the new host (the field no longer exists)')
+    check(!!spec.request && Array.isArray(spec.request.prompt) && spec.request.prompt[0].text.includes('当前任务状态包'),
+      'the state package travels in request.prompt')
+  }
+  {
+    const st = loadState(d)
+    check(st.review_history.length === 1 && st.review_history[0].code === 'C',
+      'NEW host: the verdict is booked in the mechanical file', JSON.stringify(st.review_history))
+    check(st.review_history[0].backend === 'activation', 'the ledger records which backend ran it',
+      JSON.stringify(st.review_history[0]))
+    check(/none/.test(String(st.review_history[0].tool_restriction)),
+      'the ledger admits the tool restriction is gone on the new host (capability regression disclosed)')
+  }
+
+  // 13b 旧代回归：仍走 start()、仍限制工具集
+  const d2 = fresh('host-old')
+  const legacy = []
+  const ctxOld = {
+    get: (name) => name !== 'subagents' ? null : {
+      getProvider: () => ({ name: 'spawn' }),
+      start: async (provider, req) => {
+        legacy.push({ provider, req })
+        return { result: Promise.resolve({ output: [{ type: 'text', text: 'A' }] }), dispose: async () => {} }
+      },
+    },
+  }
+  const agent2 = mkAgent('running')
+  for (let i = 1; i <= 3; i++) onGsasRound({ dir: d2, agent: agent2, wR: 13 }, { ctx: ctxOld, pluginRoot: ROOT })
+  await new Promise(r => setTimeout(r, 80))
+  check(legacy.length === 1, 'OLD host: still one start() per due round', 'calls=' + legacy.length)
+  check(legacy[0]?.req?.toolFilter?.allow?.join('/') === 'read/glob/grep',
+    'OLD host: the read-only allow-list is unchanged', JSON.stringify(legacy[0]?.req?.toolFilter))
+  {
+    const st = loadState(d2)
+    check(st.review_history[0]?.backend === 'legacy' && st.review_history[0]?.code === 'A',
+      'OLD host: booked with backend=legacy (byte-level behaviour unchanged)')
+  }
+
+  // 13c 两代都没有 ⇒ 仍是"服务不可用"，不抛
+  {
+    const d3 = fresh('host-none')
+    const agent3 = mkAgent('running')
+    const ctxNone = { get: (name) => name !== 'subagents' ? null : { getProvider: () => ({ name: 'spawn' }) } }
+    for (let i = 1; i <= 3; i++) onGsasRound({ dir: d3, agent: agent3, wR: 13 }, { ctx: ctxNone, pluginRoot: ROOT, timeoutMs: 50 })
+    await new Promise(r => setTimeout(r, 80))
+    const st = loadState(d3)
+    check(st.review_history[0]?.invalid === true && /service unavailable/.test(String(st.review_history[0].reason)),
+      'neither entry point ⇒ invalid, with the unchanged "service unavailable" reason')
+  }
+}
+
+// ── 14. 0.10.2（B2）：识别侧双语 ────────────────────────────────────────────
+// 病征：`RE_RESUME` / `detectRelease` 只认中文 ⇒ 英文用户说 continue/resume 无法恢复检测器、
+// 英文判断栏永远解不了软冻结（注入文本早就双语，双语只覆盖了"说"没覆盖"听"）。
+console.log('\n== 14. the detector listens in both languages (0.10.2 / B2) ==')
+{
+  const d = fresh('b2-listen')
+  const agent = mkAgent('running')
+  agent.session = { events: [] }
+  let seq = 0
+  agent.pushUser = (text) => agent.session.events.push({ type: 'user/message', seq: ++seq, data: { content: [{ type: 'text', text }] } })
+
+  agent.pushUser('please refine this pattern')          // 首轮：只吸收基线
+  onGsasRound({ dir: d, agent })
+  agent.pushUser('I will take this over, hand off the K splitting')
+  onGsasRound({ dir: d, agent })
+  let st = loadState(d)
+  check(st.human_takeover === true, 'an English takeover message closes the detector too')
+
+  agent.pushUser('that peak looks odd')                  // 无关英文消息
+  onGsasRound({ dir: d, agent })
+  st = loadState(d)
+  check(st.human_takeover === true, 'an unrelated English message does NOT resume it')
+
+  agent.pushUser('ok, continue with the refinement')      // 英文"继续"
+  onGsasRound({ dir: d, agent })
+  st = loadState(d)
+  check(st.human_takeover === false && st.detector_enabled === true,
+    'English "continue" resumes the detector (B2 fix)')
+  check(st.takeover_history.some(x => x.action === 'resume'), 'the English resume is recorded')
+
+  // 中文仍恢复（回归，不能被英文分支挤掉）
+  agent.pushUser('回归中文')
+  onGsasRound({ dir: d, agent })
+  agent.pushUser('我来接管')
+  onGsasRound({ dir: d, agent })
+  agent.pushUser('交回给你，继续')
+  onGsasRound({ dir: d, agent })
+  st = loadState(d)
+  check(st.human_takeover === false && st.detector_enabled === true, 'Chinese "继续/交回" still resumes (regression)')
+}
+
+// ── 15. 释放条件的双语标记 ──────────────────────────────────────────────────
+{
+  const d = fresh('b2-release')
+  const st = loadState(d)
+  markFrozen(st, 'D', 3)
+  saveState(d, st)
+  writeFileSync(join(d, JUDGMENT_FILE), '# judgment\nchecklist re-read: yes\nnew route: try branch A\n', 'utf8')
+  const rEn = mod.detectRelease(d, loadState(d))
+  check(rEn.released === true, 'English judgement markers lift the soft freeze (B2 fix)')
+
+  const d2 = fresh('b2-release-neg')
+  const st2 = loadState(d2)
+  markFrozen(st2, 'D', 3)
+  saveState(d2, st2)
+  writeFileSync(join(d2, JUDGMENT_FILE), '# judgment\nchecklist re-read: yes\n(same route as before)\n', 'utf8')
+  const rHalf = mod.detectRelease(d2, loadState(d2))
+  check(rHalf.released === false, 'only one of the two markers does NOT release (negative control)')
+
+  const d3 = fresh('b2-release-zh')
+  const st3 = loadState(d3)
+  markFrozen(st3, 'D', 3)
+  saveState(d3, st3)
+  writeFileSync(join(d3, JUDGMENT_FILE), '# judgment\n已读检查表：是\n新路线：先试分支 A\n', 'utf8')
+  const rZh = mod.detectRelease(d3, loadState(d3))
+  check(rZh.released === true, 'Chinese markers still release (regression)')
+}
+
 console.log(`\n  ${fail === 0 ? 'ALL PASS' : 'FAILURES'} — pass=${pass} fail=${fail}`)
 rmSync(WORK, { recursive: true, force: true })
 process.exit(fail === 0 ? 0 : 1)

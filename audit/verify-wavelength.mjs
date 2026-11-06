@@ -100,7 +100,10 @@ for (const n of ['cif_to_pcr', 'xrd_refine_auto']) {
 const SYN = join(WORK, 'conflict.dat')
 writeFileSync(SYN, Array.from({ length: 40 }, (_, i) => `${(10 + i * 0.02).toFixed(2)} ${100 + (i % 7) * 3}`).join('\n') + '\n')
 try {
-  await byName['xrd_refine_manual'].execute({ data: SYN, wavelength: 1.5, wavelength_doublet: [1.5, 1.6, 0.5] }, exec)
+  // 0.10.0 D gate: a hypothesis is required before the handler reaches the λ check, otherwise
+  // the gate's refusal is what surfaces and this control would stop testing mutual exclusion.
+  await byName['xrd_refine_manual'].execute({ data: SYN, wavelength: 1.5, wavelength_doublet: [1.5, 1.6, 0.5],
+    hypothesis: 'audit: single λ and a doublet must not be accepted together' }, exec)
   report.fail('xrd_refine_manual accepted BOTH wavelength and wavelength_doublet')
 } catch (e) {
   const m = String(e.message ?? e)

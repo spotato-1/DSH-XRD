@@ -3,6 +3,395 @@
 All notable interface changes are recorded here. The authoritative interface
 contract lives in [INTERFACE.md](./INTERFACE.md).
 
+## 0.10.2 — 2026-11-06 — **the reviewer works on both host generations, and the detector listens in both languages**
+
+Two defects, both of them **silent**, both in the D19/D20 review layer. The user's verdict on the
+first: *"这个是BUG要修复到支持新代为止，先做探查然后给方案"*. **No tool, parameter, schema field or
+default changed; still 12 tools, 7 skills.**
+
+### 1. A host upgrade turned the complex-case reviewer into a no-op (group B)
+
+`dsh-subagent 0.2.1-rc.2` (shipped in DSH Desktop 2.0.18) replaced the service entry point
+`start(name, request)` with `startActivation(spec)`. `lib/review.js` probed
+`typeof subagents.start === 'function'`, which is **false** on that host, so every due review took the
+"service unavailable" branch: **no crash, no warning, no review** — the detector kept counting rounds
+and booked `invalid` verdicts forever.
+
+**Fixed** by a new `lib/subagent-bridge.js` that feature-detects the entry point and maps the request:
+
+| | legacy `start(name, request)` | new `startActivation(spec)` |
+|---|---|---|
+| provider | 1st argument | `spec.provider` |
+| label | `request.label` | `spec.label` |
+| prompt | `request.prompt` | `spec.request.prompt` (same block shape) |
+| parent / signal | `request.parent` / `request.signal` | `spec.request.parent` / `spec.signal` |
+| maxDepth / agentOptions | `request.*` | `spec.request.*` |
+| toolFilter | `request.toolFilter` | **does not exist any more** |
+| delivery | — | `spec.delivery` |
+| handle | `{ result, dispose }` | `{ childId, result, dispose }` |
+
+Three facts made this a ~20-line change rather than a rewrite, all read from the new host's source:
+both generations return a handle with `result` + `dispose()`; `result` resolves to
+`{ output: [{type:'text',text}], stopReason }` in **both**; and `dispose()` is idempotent, so the
+existing timeout / parse / dispose-ceiling logic is reused unchanged.
+
+Two deliberate capability differences are **disclosed, not papered over**:
+
+- **`toolFilter` is gone on the new host.** Its capability table is
+  `agentOptions / agentPreset / outputSchema / depthLimit`; persona and tool composition moved to
+  Agent Preset, and `dsh-tool-subagent` rejects those two fields outright. So on the new host the
+  reviewer child sees the **parent's full toolset** instead of `read/glob/grep`. The ledger now
+  carries `review_history[].tool_restriction`, which says exactly which case applied.
+- **`delivery` is set to `caller`.** With the default/`parent` the new host posts a
+  `Background subagent … finished` notice into the parent conversation when the child settles, on top
+  of the plugin's own injected verdict — two reports for one review. `caller` makes the host skip that
+  notice. The cost (the child does not appear in the host's subagent catalog) is accepted.
+
+`review_history[]` also gains `backend` (`legacy` / `activation`), so a future reader can tell which
+host generation produced a given verdict.
+
+### 2. The detector only listened in Chinese (group B2)
+
+The injected text was bilingual since 0.8.2, but the **recognition** side was hardcoded to Chinese:
+`RE_RESUME` accepted only 继续/交回/接着/恢复, so an English-speaking user could never re-enable a
+closed detector, and `detectRelease` required the judgement file to contain 已读检查表 + 新路线, so an
+English judgement file could never lift a soft freeze. **Fixed**: both regexes accept English
+(`continue` / `resume` / `go on` / `carry on` / `hand over` / `take it back`; `checklist re-read` /
+`read the checklist` / `new route` / `new approach` / `new hypothesis`), `RE_RESUME` stays
+case-insensitive, and `skills/xrd-workflow/SKILL.md` now states that both languages are accepted.
+Chinese remains the primary spelling — the Chinese branches are regression-tested.
+
+### 3. The injected message's `source.kind` also changed generation (found by the two-generation run)
+
+The `subagents` entry point was not the only API that moved in the 0.1 → 0.2 host upgrade. The new
+host writes **session format v4**, and its admission check
+(`dsh-session-format-v3-to-v4/lib/index.js:126`) rejects any message whose `source.kind` is the
+retired wrapper:
+
+```js
+if (… || value["kind"] === "plugin") throw new SessionFormatError("format v4 message requires a producer-owned source kind");
+```
+
+v3 plugin sources are migrated to the **producer's own kind** by `producerKind()` (L87-93): a known
+producer keeps its bare name, anything else becomes `plugin:<name>`, and the `plugin` field is dropped
+(L101-106). So `{ kind: 'plugin', plugin: 'dsh-xrd' }` — correct on 0.10.1 and earlier, and still
+correct on the old host — is **refused on the new host**, and every review-layer injection (status
+table, E reminder, verdict, detector notices) would have died there.
+
+**Fixed** with the same generational branch as the entry point: `SOURCE_KIND`
+(`legacy: 'plugin'` / `activation: 'plugin:dsh-xrd'`) + `sourceKindFor(backend)` in
+`lib/subagent-bridge.js`; `lib/review.js` caches the detected backend (`setBackend`, called at the top
+of `onGsasRound` **before any delivery**) and `injectedMessage` emits the matching shape (the `plugin`
+field is dropped for the new host); `isPluginEvent` now recognises both `kind === 'plugin'` and
+`kind.startsWith('plugin:')`, so the plugin's own injections are still not mistaken for a human
+takeover.
+
+### How much of this is actually verified
+
+**(a) real host, old generation — passed, after this change.** Three real `xrd_refine_gsas` rounds on
+the running 0.1.0-rc.5 host produced
+`review_mechanical_REVCHKLIVE.json` with `gsas_round_count: 3`,
+`review_history[0] = { code: "D", level: 1, backend: "legacy", tool_restriction: "read/glob/grep" }`,
+`detector_enabled: true`, `takeover_history: []`, plus an independently created child-session
+directory (`…/sessions/--D-AI-DSH--/7adaf1a5-…`, bare uuid, same second as the round). The child
+returned its single code in **~5.2 s** (round 3 at 13:45:06.076Z, verdict booked at 13:45:11.295Z).
+
+**(a) real host, new generation — passed.** On DSH Desktop 2.0.18 (host 0.2.1-rc.2), driven in an
+isolated home, three `xrd_refine_gsas` rounds produced a ledger with
+`backend: "activation"`, `tool_restriction: "none (new host: toolFilter moved to Agent Preset)"`,
+`code: "A"` and a bare-uuid child-session directory — i.e. `startActivation` really did derive the
+reviewer and the v4 `plugin:dsh-xrd` source kind really was accepted. (Reported by the independent
+executor that ran that bed; the underlying v4 rule and the `producerKind` mapping were re-read from the
+host source here, and the same three rounds were re-run on the old host locally.)
+
+**(b) isolated reproduction, both paths** — `node lib/subagent-bridge.js --selftest` **33/33**
+(fake services: legacy-only, activation-only, neither, both, throwing, missing parent/signal/prompt);
+`workspace/xrd-plugin-checks/verify-review-detector.mjs` **180/180**, whose §13 drives a
+**fake service that exposes only `startActivation`** and asserts the spec shape, `delivery: 'caller'`,
+the absence of `toolFilter`, the booked `backend`, and that the **legacy path is byte-for-byte
+unchanged** — plus §14/§15 for the bilingual detector and its negative control (one marker alone must
+not release). `verify-source-kind.mjs` **6/6** covers the new `sourceKindFor` mapping, both
+`injectedMessage` shapes (including "no `plugin` field on the new host") and the two-generation
+`isPluginEvent`.
+
+**(a) bilingual detector — both halves real-host verified.** On the running old-generation host, a
+ledger seeded as soft-frozen (`frozen.active: true`, level 3) plus a judgement file written with the
+**English** markers `checklist re-read` / `new route` produced, in one ordinary round, both the injected
+`Freeze lifted — the checklist has been read and a new route has been laid out.` notice and
+`frozen.active: false, released_at_round: 3` in the ledger. The **resume** half was then driven the same
+way: a ledger seeded as closed (`human_takeover: true, detector_enabled: false`), and a human message
+consisting of the single word `continue`; the next ordinary round injected
+`Detector back on — every counter is reset and counting starts over from zero.` and the ledger shows
+`human_takeover: false`, `detector_enabled: true`, a new `takeover_history` entry
+`{ action: "resume", at_round: 4 }`, `streaks`/`levels` zeroed, and `last_review_at_round: 4` (the resume
+defers the next review instead of triggering one immediately). So `RE_CHECKLIST_READ` / `RE_NEW_ROUTE` /
+`RE_RESUME` all fire on English text in a live host, not only in the unit tests. The negative control —
+an unrelated message must **not** resume a closed detector — is covered in §14 of the suite.
+
+**(c) the round counter counts EXECUTED rounds — that is the contract, clarified here.** The ledger
+counts a round when `xrd_refine_gsas` actually got as far as running the engine and reporting a result,
+**including a handled failure**: driving it with a truncated project produced
+`gsas_round_count: 1, rounds[0] = { wR: null, ok: false }`, so a failed-but-executed round counts and the
+E reminder / review cadence still advance. What does **not** count is a round where the engine runner
+itself never produced a result — e.g. the `spawn EPERM` seen on the 2.0.18 bed, where the runner threw and
+only `gsas_plan.json` reached disk. The hooks sit after `await runEngine(...)` (two call sites: no-result
+failure and success), so the rule is simply **"executed rounds only"**. This is deliberate, not a defect:
+a round that never ran has no R, no engine state and nothing to judge, and counting it would let a broken
+environment look like refinement progress. The wording here and the code comment at the failure hook now
+state it that way.
+
+A `spawn EPERM` observed while first probing the 2.0.18 bed was **not** reproduced in the successful
+new-generation run above and is attributed to that bed's subprocess policy, not to this fix.
+
+**Packaged.** On the user's request this version **was** cut (`dist/dsh-xrd-0.10.2` tree plus
+`.zip` / `.tar.gz` / `-win64-full-deps.zip`), and the release chain was rerun end to end for it:
+`sync` + `sync-skills` → `build-xrd-release` (**LEAK AUDIT clean**) → zip/tar (121 entries each,
+`fp2k`/`fp2k.exe` carry the executable bit) → `verify-package` (**FAIL 0 / WARN 0 / SKIP 0**) →
+`three-copy-check` (**AGREE**: source == profile byte for byte, package == sanitise(source), 11 files
+scrubbed + 1 template rename) → **the package auditing itself** (`audit/verify-all.mjs`: **15/15
+scripts pass**, once it could spawn engines) → full-dependency bundle + its own smoke test
+(**SMOKE OK**). The `0.10.0` archives stay on disk untouched as the previous published cut; the
+`0.10.1` fixes and this entry are what `0.10.2` adds.
+
+### 4. The shipped audit module had gone red against 0.10.0's own gates — repaired
+
+Running the package's own `audit/verify-all.mjs` for the first time since 0.10.0 showed **6 of 15
+suites failing** (24 + 24 + 2 + 1 assertions). None of it was a product defect: the **audit fixtures
+had not followed the gates** that 0.10.0 added, so the suites stopped short of the behaviour they
+exist to check.
+
+- **The hypothesis gate (D) refused the manual-engine controls.** `xrd_refine_manual` now rejects a
+  run with no `hypothesis` before it builds a plan (11 refusals), so the timeout, cancellation,
+  no-result and mutual-exclusion controls never reached their subject. Every manual call in
+  `verify-manual-timeout`, `verify-proc-supervision` and `verify-wavelength` now declares its own
+  hypothesis — and the two procedural controls that would otherwise trip the gate's
+  "identical change digest" rule got their own work directories, with the reason written at the site.
+- **The provenance gate (C) refused the pcr fixtures** (25 refusals): `fixtures/Y2O3.pcr` shipped
+  without a sidecar, so `xrd_refine_auto` / `xrd_verify_fp2k` rejected it before fp2k ran. The
+  fixture now carries a `kind=generated` sidecar of its own, `_lib.mjs` gained
+  `copyPcrWithProvenance()` (stage the pcr *with* its sidecar) and `writeProvenanceFor()` (record a
+  pcr the test itself mutated — used by the `../` path-escape control), and the suites that stage
+  fixtures use them. The gate's own refusals keep their reverse controls in `gate-cases.mjs`.
+- **`safeKey` assertions were stale** after the 0.10.0 F1 fix: `safeStem` now carries the sample
+  **identity** (extension dropped, nothing else touched) while sanitising happens when the **file
+  name** is derived. The suite asserts that split explicitly, plus the collision fix (two different
+  non-ASCII samples must never share one ledger).
+
+Result: all six suites are green (`verify-fp2k-check`, `verify-autofp-replaced`, `verify-wavelength`,
+`verify-manual-timeout` 37/37, `verify-review-key` 51/51 with one by-design skip,
+`verify-proc-supervision` 186/186 no skips) and the whole module passes **15/15** from inside the
+extracted package.
+
+**One flaky assertion was fixed too, not papered over.** In the full-module run,
+`verify-proc-supervision` §9 ("a host service that throws falls back instead of crashing") failed once:
+its ticker child needs ~4.8 s of python plus startup and the control gave it 10 s, which an idle
+machine meets and a machine running the rest of the module does not. The budget is 30 s now — the
+assertion (`code === 0`, i.e. the fallback child really ran) is unchanged; only the margin was wrong.
+A control that fails under load is not "sometimes passing", it is under-specified.
+
+**One leak-audit catch worth naming:** the first 0.10.2 build reported 2 findings, both in
+`audit/e2e-full.mjs` — the maintenance end-to-end harness I added this session carried two absolute
+maintainer paths (a GSAS-II root and a pattern-instrument file). They are gone now: the harness takes
+the GSAS root from the plugin's own resolution chain (`<plugin>/xrd.local.json`) and the instrument file
+from `<GSAS root>/tests/testinp/INST_XRY.PRM`. **New test code is the most likely leak carrier** — the
+audit is what caught it, not review.
+
+## 0.10.1 — 2026-11-06 — **two defects an independent end-to-end run found, both of them silent**
+
+An independent Linux end-to-end run of 0.10.0 (Y2O3: data → `cif_to_pcr` → `xrd_refine_auto` →
+`xrd_verify_fp2k`) did **not** get through, and a second problem showed up in the same run. Both are
+fixed here. **No parameter, schema field or default changed; still 12 tools, 7 skills.**
+**Per the user's instruction this version was NOT re-packaged** — the `0.10.0` archives already in
+`dist/` remain the published artifacts and **do not contain these two fixes**; a `0.10.1` archive
+will be cut when packaging is requested.
+
+### How much of this is actually verified
+
+**(a) real data, end to end** — a real pattern and real engines; **(b) isolated reproduction** — a
+constructed input reproduces it; **(c) source read only**. Items not redone in this entry keep the
+level stated in their 0.10.0 entry.
+
+### 1. The entry gate refused the plugin's own output (defect A)
+
+`xrd_refine_auto` copies the pcr and its pattern file into `.fp2k-work-*` but **did not copy
+`<pcr>.provenance.json`**. So `fp2k_driver.py` reported
+`no provenance sidecar (legacy or user-supplied pcr) - not registered`, the delivered
+`refined_pcr` carried **no lineage**, and the twin gate in `xrd_verify_fp2k` then refused it with
+`refused: this pcr has no provenance record` — the 0.10.0 gate blocked the normal
+generate → refine → verify path. **Fixed** by carrying the sidecar with the working copy, which is
+what lets the driver append the write-back as a descendant. A missing sidecar stays an ACCEPTED
+state (legacy / user-supplied): the entry gate has already decided whether the run may proceed.
+*(a) verified by rerunning the same chain: the refinement now records a descendant and the
+re-verification is accepted.*
+
+### 2. Two writers, two comment conventions — the plan was silently ignored (defect B)
+
+The in-tree generator writes `! NCY` (space after the bang) and
+`! Six background coefficients, then codes` (lower-case), while the driver matched `!NCY` and
+`Background coefficients` as **case-sensitive exact substrings**. On a generator-produced pcr the
+driver therefore found no NCY line (the requested cycle count was ignored) and no background panel
+(every background level was skipped — 22 ladder steps dropped in the reported run) **while still
+exiting normally**. **Fixed** with `find_ncy_line()` (tolerates spacing and case) and
+`find_header_ci()` (case-insensitive comment-header match), used by `set_ncy`,
+`set_step_range` and the background switch. *(b) both writers now resolve: NCY at line 15
+(generator) / 12 (exe), background header at 22 / 25.*
+
+### Why this entry exists at all
+
+Both defects share one shape: **the run completes and reports success while doing less than it was
+asked to do**. A local run that never loses the sidecar cannot see defect A, and a pcr written by
+the exe cannot see defect B — the independent run was the only thing that could.
+
+### 3. Third defect, found by rerunning the chain locally after fixing the first two (defect C)
+
+`xrd_refine_auto` declared `provenance` in its output schema and rendered it, and three **failure**
+paths set it — but the **success** path never did. A good run therefore reported `provenance: {}`
+while the sidecar next to the delivered pcr *did* contain the `fp2k_delivered` descendant. Fixed by
+setting `provenance: provSummary` on the success path too. *(a) the rerun shows
+`{"recorded":true,"position":"fp2k_delivered",…}`.* This is the same "declared, rendered, never
+populated" pattern this project has now hit four times; the E2E checks the *value*, not the field's
+existence.
+
+### 4. What the 0.10.1 verification actually covered
+
+A single harness (`workspace/xrd-plugin-checks/e2e-full.mjs`, maintained outside the package)
+runs **four legs end to end on real engines** from the source tree — it imports `lib/index.js`
+itself, so a JS change is exercised without a restart:
+
+1. **FullProf leg** — data read (7351 points from 3.000°) → in-tree generator + provenance at
+   birth → `xrd_refine_auto` (18 accepted ladder steps incl. two background levels) → delivered
+   pcr re-enters `xrd_verify_fp2k` and is accepted as `descendant:fp2k_delivered` →
+   an untraceable pcr is still refused (R1).
+2. **Manual-engine leg** — `xrd_refine_manual` (hypothesis gate: allow, recorded) →
+   `xrd_export_cif` writes the refined CIF **and** the fit figure.
+3. **GSAS-II leg** — `xrd_refine_gsas` (wR reported) → `xrd_gsas_ops` reads the project back →
+   `xrd_finalize` packages report + figure + per-phase CIF.
+4. **Identification and export legs** — `xrd_phase_screen` scores the phase against the converged
+   residual, and `xrd-plot-export` writes both CSV families + `_stats_summary.csv` from the `.gpx`.
+
+All checks green, ~4.6 min. **Out of scope of that harness:** the desktop host, model
+decision-making, and the two-generation host compatibility described under 0.10.0's
+"Not in this cut".
+
+## 0.10.0 — 2026-11-06 — **the converter becomes ours, and a pcr now has to prove where it came from before an engine touches it**
+
+Three changes, all triggered by the user's decision to stop importing a third-party structure
+converter ("这是 XRD 脚本 0.10.0 版本的重大更新，将去除第三方的 CIF to PCR exe，这是出于代码兼容性
+角度，避免带入未知的第三方结构"), and by the observation that a hand-assembled `.pcr` could be
+refined without anyone being able to tell. **Tool count stays 12; skills go 6 → 7.**
+Two parameters were added and none was renamed or removed; every omitted parameter keeps the
+previous behaviour, so an existing call is byte-identical.
+
+### How much of this is actually verified
+
+Three evidence levels are used below and they are **not** interchangeable:
+**(a) real data, end to end** — real patterns and real projects were run and the outputs inspected;
+**(b) isolated reproduction** — a constructed input reproduces the mechanism;
+**(c) source read only** — the code was read, nothing was run.
+Items that are **not** done in this cut are listed separately at the end; they are not defects that
+were fixed, and none of them should be described as verified.
+
+### 1. `cif_to_pcr` writes the pattern itself; the exe is a recorded fallback
+
+* New optional `generator` (`auto`/`python`/`exe`), `data_file`, `range`. With `data_file` +
+  `range` + `wavelength` the **in-tree** `engine/cif_to_pcr.py` runs and writes the whole pattern
+  block; without a complete pattern (or when the generator refuses that CIF) the third-party
+  `CIFs_to_PCR.exe` takes over and the hand-over is **recorded** in `generator.kind` +
+  `generator.reason` — never silent. *(a) three crystal systems run end to end; the exe fallback
+  reproduced twice, including a CIF the generator rejects on purpose.*
+* New `engine/dat_align.py` prepends the six `COMM` lines `Ins=10` needs. Measured on the same
+  data: **7345 points from 2θmin 3.120° before, 7351 points from 3.000° after** — the converter was
+  silently eating six data points. *(a)*
+* New `engine/pcr_provenance.py` writes `<pcr>.provenance.json` at birth (kind, pcr sha256,
+  generator sha256, source CIF) and appends later write-backs as descendants, so fp2k's in-place
+  rewrite of the pcr stops turning a correct record into a stale one. *(a)*
+* **Non-ASCII file stems are made portable**: the generator requires a portable ASCII data-file
+  name and fp2k resolves the pattern by the pcr stem, so a Chinese sample name made the generator
+  refuse *every* time (`data_file must be a portable ASCII basename`) and fall back to the exe —
+  measured with a Chinese CIF **and** an ASCII data file, i.e. the constraint is the stem, not just
+  the file name. The stem is now derived with the same helper the review ledger uses, and the
+  rename is printed (`file stem: X -> Y`). *(a)*
+* **Fixed on the way**: `pcr_provenance.py` used to store a *display-escaped* string in the
+  data field `source_cif.path` (a Chinese CIF name became the literal text `\u6c27\u5316…`), which
+  no program could resolve back to a file; it now stores the real name. *(a)*
+
+### 2. The entry gate: an untraceable pcr is refused before any engine runs
+
+* `xrd_refine_auto` and `xrd_verify_fp2k` verify the provenance of the pcr they are given. New
+  optional `allow_unprovenanced` / `unprovenanced_reason` / `confirm_user_pcr`; new output
+  `provenance_gate`. A refusal throws with the gate's three-line wording, because the message is
+  the deliverable. *(a) six cases end to end, including a real fp2k run on both an accepted and a
+  waived pcr.*
+* **The gate judges `kind` itself.** `pcr_provenance.py verify` does not (measured: a sidecar whose
+  kind was rewritten to `adopted` still returned `exit 0 / ok:true / position:head`), so treating
+  the exit code as a pass would have let the adopted-sidecar wash straight through.
+  *(a) reproduced on a real fixture.*
+* **A waiver covers `no provenance` and nothing else** — a byte mismatch, a broken chain or an
+  unreadable sidecar is never waivable; when a waiver takes effect the output states
+  `UNVERIFIED ORIGIN: …` and repeats the reason verbatim, and the waiver is not written into the
+  sidecar. *(a)*
+* `confirm_user_pcr` records `kind:"user_provided"` bound to the file's current sha256 and refuses
+  afterwards if a single byte changed. *(a) the sidecar was inspected after the call and the file
+  was then edited on purpose to confirm the refusal.*
+* **Bug found by that last test**: `user-provide` requires `--note`; without it the CLI exited 2,
+  no sidecar was written, and the gate silently degraded to "no confirmation" while its message
+  told the caller to confirm. Fixed, and a confirmation that cannot be recorded now reports that
+  instead of falling through. *(a)*
+* **`xrd_finalize` / `xrd_export_cif` were left alone**: they never touch a pcr (measured — zero
+  references), so a gate there would never fire and would only advertise enforcement.
+
+### 3. `xrd_refine_manual` has a machine-readable escalation gate
+
+* New `engine/hypothesis_gate.py` + `lib/hypothesis-gate.js`; `xrd_refine_manual` exposes `gate`
+  and refuses a blank hypothesis, a repeat, an identical parameter set, or a 4th consecutive
+  no-improvement round that brings no new hypothesis — before any engine work. A legitimate new
+  hypothesis is still allowed after three flat rounds. *(a) three real cases plus a deny case that
+  produced no artifacts at all; (b) 6-assertion selftest.*
+* **Fixed**: Chinese sample names all collapsed to one review ledger (`review_mechanical__.json`),
+  so one sample's history could deny another (measured: a first-ever attempt refused as "three
+  consecutive rounds without improvement"). The ledger key now carries a sha1 suffix, and the
+  identity is kept separate from the filename — the ledger records the **original** sample name
+  while its FILE name carries the hash. *(a) verified with real tool calls; (b) JS and Python
+  produce identical names for five boundary samples.*
+
+### 4. New skill `xrd-plot-export`
+
+* Exports a finished refinement as the two plotting CSV families plus `_stats_summary.csv`, with
+  `scripts/plot_export.py`. The reason it exists is not "figures are nice": **GSAS-II's export
+  support differs across versions/installations**, and a **manual-engine result has no GSAS project
+  to export from at all** — so the data would otherwise simply be unavailable. It therefore reads
+  the arrays itself and covers `.gpx`, engine `components.json` and amorphous hump work dirs.
+  *(a) all three sources run; the `.gpx`-sourced output is byte-identical (modulo line endings) to
+  the batch that was delivered by hand before the skill existed.*
+* Two **deliberate** differences from that old batch, so a re-export is not mistaken for a drift:
+  the 2θ column now keeps 5 decimals in *all* three source branches (the old non-gpx files had 4),
+  and per-phase split files now carry `h,k,l,Mult` (the old batch was produced by two one-off
+  scripts and came out with 7 columns for one sample and 3 for another). *(a)*
+
+### Not in this cut (do not describe as verified)
+
+* **Host `startActivation` dual-generation compatibility + bilingual detector** — not implemented.
+* **Manual-engine `stage`/`floor` allow-lists** in the tool descriptions (`floor` as a
+  full-model-only proxy that the escalation gate can unlock) — not implemented.
+* **Portable packages** were not rebuilt; the 0.9.1 bundles in `dsh-portable` still carry 0.9.1.
+* **`xrd_verify_fp2k` stages only `<stem><ext>` pattern files**, so a pcr whose body names a
+  different data file cannot be verified by that tool. Found 2026-11-06, **not fixed**.
+* The process guard's progress tick intermittently fails to rename (`WinError 5`, measured 4 of
+  8008 ticks on one run; the tick file was complete afterwards). **Not fixed** — cosmetic until it
+  becomes frequent.
+* The pre-fix Chinese-name ledger (`review_mechanical__.json`) is left untouched: it is the only
+  history of those samples and cannot be split back apart. **Not migrated.**
+
+## 0.9.1 re-cut — 2026-10-24 — **licence changed to GPL-3.0**
+
+The project licence moved from MIT to **GPL-3.0** in the source repository. This re-cut brings the
+shipped artefacts in line: `LICENSE` now carries the GNU GPL version 3 text (with the FSF
+how-to-apply notice naming the copyright holder), `package.json` declares `"license": "GPL-3.0"`,
+and the two README licence statements say the same. The `.zip` / `.tar.gz` archives were rebuilt
+from this tree. **No code, parameter, schema, skill text or default changed — the tool count
+remains 12**; the previously produced archives are superseded (same version number, new hashes,
+and the licence text inside them is now GPL-3.0).
+
 ## 0.9.1 — 2026-10-05 — **four defects from real work: the GSAS-II writer never worked on a new project, the hand-off seeded the wrong width, the review subagent died in 15 ms, and one converter waited out a prompt**
 
 All four were reported by the user from actual runs (the third was diagnosed for them by a separate
@@ -2292,11 +2681,12 @@ now **inside the package** and the plugin works out of the box.
 
 ### Licensing
 
-The 0.4.0 release used separate licences for the plugin code and the bundled
-FullProf files. During the 0.9.1 open-source preparation, the repository was
-unified under **GNU GPL v3**. The FullProf files remain unchanged and retain
-their attribution, hashes, licence text, and source pointer in
-`third_party/fullprof/PROVENANCE.md`.
+`dsh-xrd` itself was **MIT** at that time — the project licence is now **GPL-3.0** (2026-10-24
+re-cut, see the top of this file). The bundled FullProf files are covered by the
+**GPL-3 text shipped alongside them** — AutoFP distributes its built-in FullProf
+under GPL v3, and this package only re-packages those files unchanged, with
+attribution and a pointer to the official FullProf site for corresponding
+source. Anyone redistributing this package carries those terms with it.
 
 ### Unchanged
 

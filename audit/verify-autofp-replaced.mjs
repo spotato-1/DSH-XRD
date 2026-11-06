@@ -7,7 +7,7 @@
 import { mkdirSync, rmSync, copyFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { importRoot, pluginEntry, mockContext, WORK_ROOT, FIXTURES, report } from './_lib.mjs'
+import { importRoot, pluginEntry, mockContext, WORK_ROOT, FIXTURES, report, copyPcrWithProvenance } from './_lib.mjs'
 
 const ENTRY = pluginEntry(importRoot())
 const WORK = join(WORK_ROOT, 'refine_auto')
@@ -52,7 +52,8 @@ console.log('output fields:', outProps.join(', '))
 
 // a converter-produced pcr, paired with its data under the declared name
 const pcr = join(WORK, 'Y2O3.pcr')
-copyFileSync(SRC_PCR, pcr)
+// 0.10.0 entry gate: the fixture's provenance sidecar travels with it (see _lib.copyPcrWithProvenance).
+copyPcrWithProvenance(SRC_PCR, pcr)
 copyFileSync(DAT, join(WORK, 'Y2O3.dat'))
 
 const exec = { agent: { session: { header: { cwd: WORK } } } }

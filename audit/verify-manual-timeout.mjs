@@ -118,7 +118,10 @@ const t0 = Date.now()
 let res = null
 let threw = null
 try {
-  res = await tool.execute({ data: dataFile, out_dir: WORK, engine: hangEngine }, exec)
+  res = await tool.execute({ data: dataFile, out_dir: WORK, engine: hangEngine,
+    // 0.10.0 D gate: xrd_refine_manual refuses a run without a hypothesis before it builds a plan.
+    // Every call in this suite carries its own, otherwise the gate (not the budget) is what fails.
+    hypothesis: 'audit: a hanging engine must surface a structured timeout instead of throwing' }, exec)
 } catch (e) { threw = e }
 const dt = Date.now() - t0
 if (threw) console.log(`  [diag] threw in ${dt} ms: ${String(threw.message).split('\n').slice(0, 3).join(' | ')}`)
@@ -155,7 +158,8 @@ console.log('== 4. negative control: a fast engine still succeeds (budget not ov
 res = null
 threw = null
 try {
-  res = await tool.execute({ data: dataFile, out_dir: WORK, engine: fastEngine }, exec)
+  res = await tool.execute({ data: dataFile, out_dir: WORK, engine: fastEngine,
+    hypothesis: 'audit: a fast engine must not be reported as a budget expiry' }, exec)
 } catch (e) { threw = e }
 ok(threw === null && res && res.ok === true, 'fast engine ⇒ ok=true (no spurious timeout)')
 ok(res && res.rwp === 5.0, `rwp read from the engine result (${res && res.rwp})`)
@@ -164,9 +168,15 @@ ok(!(res && res.timed_out), 'no timed_out flag on the success path')
 console.log('== 5. no-result (non-timeout) path still names the scene ==')
 const muteEngine = join(WORK, 'mute_engine.py')
 writeFileSync(muteEngine, 'import sys\nprint("mute engine: nothing written", flush=True)\n')
+// 0.10.0 D gate: a second run in the SAME ledger with the same stage/vary set is refused as
+// "identical_change" before the engine is even started — so this control gets its own directory
+// (its point is the no-result throw, not the gate).
+const muteDir = join(WORK, 'mute'); mkdirSync(muteDir, { recursive: true })
 threw = null
-try { await tool.execute({ data: dataFile, out_dir: WORK, engine: muteEngine }, exec) } catch (e) { threw = e }
+try { await tool.execute({ data: dataFile, out_dir: muteDir, engine: muteEngine,
+    hypothesis: 'audit: an engine that produces no result is a genuine fault, not a timeout' }, exec) } catch (e) { threw = e }
 ok(threw !== null, 'a genuine engine fault still throws (not silently structured)')
+if (threw) console.log(`  [diag] section 5 throw >>> ${String(threw.message).replace(/\n/g, ' | ').slice(0, 400)}`)
 ok(threw && /artifacts kept in/.test(threw.message), 'the throw names the artifact directory')
 ok(threw && /R 值缺失 ≠ 拟合差/.test(threw.message), 'the throw warns that a missing R value is not a bad fit')
 // 2026-09-27：这句话原本只有中文，而同义的英文只出现在超时路径的 hint 里 ⇒ 两条路径口径不一致。
@@ -188,7 +198,8 @@ const staleFile = join(staleDir, 'result.json')
 writeFileSync(staleFile, JSON.stringify({ metrics: { Rwp: 1.23, Rexp: 2.0, chi2: 1.0 } }))
 threw = null
 let staleRes = null
-try { staleRes = await tool.execute({ data: dataFile, out_dir: staleDir, engine: muteEngine }, exec) } catch (e) { threw = e }
+try { staleRes = await tool.execute({ data: dataFile, out_dir: staleDir, engine: muteEngine,
+    hypothesis: 'audit: a run that writes nothing must not inherit the previous run\'s Rwp' }, exec) } catch (e) { threw = e }
 ok(threw !== null, 'a run that writes nothing still throws even with an old result.json present')
 ok(!staleRes || staleRes.rwp !== 1.23, `the stale Rwp 1.23 is NOT re-reported (got ${staleRes ? staleRes.rwp : 'a throw'})`)
 ok(existsSync(staleFile), 'the freshness gate does not delete the older file (it stays on disk, just unused)')

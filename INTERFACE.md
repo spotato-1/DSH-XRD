@@ -1,10 +1,11 @@
 # dsh-xrd interface contract
 
-**Version:** 0.9.1 (interface last changed in **0.9.0**, 2026-10-03 — additive: four explicit
-wavelength parameters and two new `xrd_data_io` actions; **still 12 tools**, nothing renamed.
-**0.9.1 (2026-10-05) changes no tool, no parameter name and no default** — it fixes four defects and
-corrects the wording of the λ contract on `xrd_refine_gsas`, whose value was never handed to GSAS-II as
-an argument at all: see the CHANGELOG's 0.9.1 entry):
+**Version:** 0.10.2 (interface last changed in **0.10.0**, 2026-11-06; 0.10.2 changed no tool, no parameter and no default — it makes the D19 reviewer bind to both host generations and makes the takeover detector bilingual) **0.10.1 fixes two silent defects without changing the interface** — additive: `cif_to_pcr`
+gained `generator`/`data_file`/`range`, the two pcr ENTRY tools gained
+`allow_unprovenanced`/`unprovenanced_reason`/`confirm_user_pcr`, and `xrd_refine_manual` now
+surfaces `gate`; **still 12 tools**, skills 6 → 7, nothing renamed — see §0.10.0 below.
+Previous: 0.9.1 (2026-10-05) changed no tool, no parameter name and no default; 0.9.0 added the
+λ parameters):
 
 * **Wavelength became an explicit, default-off parameter on the four write entry points** —
   `wavelength` (a single monochromatic value in Å) **or** `wavelength_doublet:[kα1,kα2,ratio]`
@@ -208,6 +209,86 @@ now names the interpreter, every render tolerates a value-less call, and 0.7.3 i
 fix only — same fields, better words, no crashes.)
 **Status of this file:** authoritative. If a skill, a description, or a habit
 disagrees with this file, this file wins.
+
+---
+
+## 0.10.0 — the converter, and the gate a pcr has to pass to be refined
+
+Tool count stays **12**; skill count 6 → **7**. Three things changed at the interface level.
+
+### 1. `cif_to_pcr` can write the whole pattern itself (the third-party exe is now a fallback)
+
+New **optional** parameters (omit them all and the old behaviour is byte-identical):
+
+| Parameter | Meaning |
+|---|---|
+| `generator` | `auto` (default) / `python` / `exe`. `auto` runs the in-tree `engine/cif_to_pcr.py` **when** `data_file` + `range` + `wavelength` are all given, and otherwise hands over to the third-party `CIFs_to_PCR.exe`. `python` refuses instead of falling back. `exe` forces the old binary. |
+| `data_file` | The 2θ/I file the pcr will refine. It is **not modified**: `engine/dat_align.py` writes an `Ins=10`-aligned copy next to the pcr (six `COMM` lines prepended, so FullProf's six skipped header lines land on the header, not on data). |
+| `range` | `[2θ_min, step, 2θ_max]` for the pattern block. Read it from the data file; never invent it. |
+
+New output field `generator`: `{kind: "python"|"exe", script?, version?, stem, stem_from,
+stem_changed, dat_aligned, align{...}, audit_file?, occupied_sites?, notes?, reason?}`.
+**`kind` decides what happened; `reason` explains any fallback** — a fallback is recorded, never silent.
+
+**Non-ASCII CIF names get a portable ASCII file stem** (`generator.stem`), because the generator
+requires a portable ASCII data-file name and fp2k resolves the pattern by the pcr stem. The sample
+identity stays in `stem_from` and in every human-facing report; the rename is printed as
+`file stem: <从> -> <到>`. A portable ASCII name comes back unchanged.
+
+`engine/pcr_provenance.py` writes `<pcr>.provenance.json` at birth: `kind` ∈
+`generated` / `exe_fallback` / `user_provided`, the pcr's sha256, the generator's sha256 and the
+source CIF; later refinement write-backs are **appended as descendants**, so the chain stays
+verifiable instead of going stale the first time fp2k rewrites the bytes.
+
+### 2. The ENTRY gate: `xrd_refine_auto` and `xrd_verify_fp2k` refuse an untraceable pcr
+
+Both tools now verify the provenance of the pcr they are **given** before any engine runs. Which
+tool the gate sits on matters: `xrd_finalize` and `xrd_export_cif` never handle a pcr at all
+(they package a `.gpx` result set), so a gate there would be a switch that can never fire.
+
+New **optional** parameters on both tools:
+
+| Parameter | Meaning |
+|---|---|
+| `allow_unprovenanced` | Escape hatch. Valid **only** with a non-empty `unprovenanced_reason`, and **only** when the failure is `no provenance`. A byte mismatch, a broken chain or an unreadable sidecar is never waivable. |
+| `unprovenanced_reason` | Why this must still run. Quoted verbatim in the output and in the delivery report. |
+| `confirm_user_pcr` | One-time confirmation that the pcr is the caller's own input, for a file with **no** sidecar. Records `kind:"user_provided"` bound to the file's **current sha256**; editing the file afterwards invalidates it. An existing sidecar is never overwritten. |
+
+New output field `provenance_gate`: `{allow, waived, kind, position, messageId, detail, confirmed,
+sidecar_reason}`. Refusals **throw** with the gate's own three-line wording
+(`refused:` / `why:` / `next:`), because in that case the message *is* the deliverable.
+
+The accepted origins are exactly `generated` / `exe_fallback` / `user_provided`. **The gate judges
+`kind` itself** — `pcr_provenance.py verify` does not (a sidecar whose kind is rewritten to
+`adopted` still returns `exit 0 / ok:true`), so treating the exit code as a pass would let an
+`adopted` sidecar wash through. A waiver is allowed **only** for `no provenance`; if it could cover
+a byte mismatch or a broken chain, an adopted sidecar plus one waiver would make any hand-written
+pcr deliverable. When a waiver takes effect the rendered output states `UNVERIFIED ORIGIN: …` and
+repeats the reason.
+
+### 3. `xrd_refine_manual` carries a machine-readable escalation gate
+
+The manual engine has no parameters to grind indefinitely: `xrd_refine_manual` now evaluates a
+hypothesis gate before the run and records the round afterwards, surfacing both as `gate`
+(`{decision, reason, recorded, rwp_before, rwp_after, no_improve_streak, detail}`). A blank
+hypothesis, a repeat of one already tried, an identical parameter set, or a 4th consecutive
+no-improvement round that brings no new hypothesis is refused **before** any engine work; a
+legitimate new hypothesis is allowed even after three flat rounds. This is enforcement of the
+R-value-plateau rule, not a replacement for judgement.
+
+### 4. New skill: `xrd-plot-export`
+
+Exports a finished refinement as the two CSV families a third-party plotter needs
+(`<sample>_rietveld.csv`: `2Theta,Iobs,Icalc,Iback,Idiff`; `<sample>_reflections.csv`:
+`Phase,h,k,l,Mult,d_spacing,2Theta,Icorr`; plus `_stats_summary.csv`), with
+`scripts/plot_export.py`. It exists because **GSAS-II's own export support varies by
+version/installation** and because **a manual-engine result has no GSAS project to export from** —
+so the exporter reads the arrays itself and covers `.gpx`, engine `components.json` and amorphous
+hump work dirs. Per-phase splitting (`--split-phases`) and per-band columns (`Band1..N`) included.
+
+**Not in this cut:** the host-side `startActivation` dual-generation compatibility work, the
+bilingual detector, the manual-engine `stage`/`floor` allow-lists, and rebuilt portable packages.
+They are listed again under "known gaps" in README.md.
 
 ---
 

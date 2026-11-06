@@ -1,21 +1,47 @@
 # DSH-XRD
 
-[![版本](https://img.shields.io/badge/version-0.9.1-2563eb)](./CHANGELOG.md)
+[![版本](https://img.shields.io/badge/version-0.10.2-2563eb)](./CHANGELOG.md)
 [![许可证](https://img.shields.io/badge/license-GPL--3.0-16a34a)](./LICENSE)
 [![DSH 插件](https://img.shields.io/badge/DeepSeek%20Harness-plugin-111827)](./package.json)
 
 [English](./README.md) | **简体中文**
 
-DSH-XRD 是面向 **DeepSeek Harness（DSH）** 的 AI 原生粉末 X 射线衍射与 Rietveld 精修插件。项目将 12 个原生工具、6 个工作流 skill、FullProf、有界 Python 引擎和 GSAS-II 连接成一条完整链路，可从原始衍射数据一直推进到精修结构和标准化科研交付物。
+DSH-XRD 是面向 **DeepSeek Harness（DSH）** 的 AI 原生粉末 X 射线衍射与 Rietveld 精修插件。项目将 12 个原生工具、7 个工作流 skill、FullProf、有界 Python 引擎和 GSAS-II 连接成一条完整链路，可从原始衍射数据一直推进到精修结构和标准化科研交付物。
 
 插件面向低人工干预、高自动化程度和可靠输出设计。AI 可以检查输入、识别物相、获取或重建晶体结构、自主选择精修路线、执行分阶段优化、回溯竞争假设、接续人类未完成工程，并生成最终 CIF、拟合图、报告和工程文件。
 
-- **当前版本：** 0.9.1
+- **当前版本：** 0.10.2
 - **工具接口：** [`INTERFACE.md`](./INTERFACE.md)
 - **版本历史：** [`CHANGELOG.md`](./CHANGELOG.md)
 - **开源协议：** GNU GPL v3
 - **内置运行时：** Windows 与 Linux FullProf `fp2k`，附来源与哈希记录
 
+## 0.9.1 → 0.10.2 更新内容
+
+**新增功能：**
+
+- **绘图导出 — 新技能 `xrd-plot-export`。** 成品精修现在可以导出为两套绘图 CSV——全谱 CSV
+  （`2Theta,Iobs,Icalc,Iback,Idiff`）与反射 CSV（`Phase,h,k,l,Mult,d_spacing,2Theta,Icorr`）——外加一份
+  `_stats_summary.csv`，结果可直接交给 Origin、Excel、Igor 或自定义脚本绘图。它直接读取 GSAS-II 工程、
+  有界引擎 components 和非晶宽峰工作区，因此手动引擎结果（本就没有 GSAS 工程）也终于可以绘图。这是第七个
+  内置技能。
+- **内置 CIF→PCR 生成。** `cif_to_pcr` 现在自行写出完整的 FullProf PCR；第三方 `CIFs_to_PCR.exe` 只作为
+  有记录的回退，不再静默交接。
+- **假设驱动的升级机制。** `xrd_refine_manual` 新增机器可读的闸门，阻止空白、重复或参数不变的轮次，引导
+  AI 从无意义的参数消耗转向新的结构假设或 GSAS-II 阶段。
+
+**修复：**
+
+- **复杂情形审查器现在能在 DSH 新旧两代宿主上正常工作。** 一次宿主升级（`dsh-subagent 0.2.1-rc.2`）曾让
+  审查器静默变成空转——不崩、无告警、不审查。`lib/subagent-bridge.js` 自动探测宿主的 subagent 入口并映射
+  请求，账本现在会记录实际使用哪个 backend。
+- **接管检测器现在中英双语都能听懂。** 它此前只识别中文，导致英文用户永远无法重新启用被关闭的检测器或
+  解除软冻结；两个正则现在同样接受英文。
+- **准入门不再拒绝插件自己产出的结果**、驱动现在能兼容两种 writer 的注释约定差异、成功路径现在真正填入了
+  它声明的 `provenance` 字段。
+- **中文样品名不再折叠进同一个账本**，避免一个样品的史册误伤另一个样品。
+
+工具数保持 **12**；技能数 **6 → 7**。逐项验证分级见 `CHANGELOG.md`。
 
 ## 核心优势
 
@@ -55,13 +81,29 @@ DSH-XRD 可从 Materials Project 与 COD 获取结构，比较不同多晶型，
 
 收敛工程可打包为干净 GPX、精修日志、逐相 CIF、拟合图、残差面板、反射刻度、hkl 标注、Markdown 报告、指标和 manifest。
 
+### 可追溯 PCR 生成与精修入口门禁
+
+默认 CIF→PCR 路径已由 DSH-XRD 内部实现，可写出完整 pattern block、对齐 FullProf 数据、处理可移植文件名、审计占位归一，并生成与 SHA-256 绑定的来源 sidecar。`xrd_refine_auto` 和 `xrd_verify_fp2k` 会在处理 PCR 前检查这条来源链；用户自己的 PCR 也可以通过显式确认登记为有记录的用户输入。
+
+### 假设驱动的升级机制
+
+手动引擎的连续调用由机器可读的 hypothesis gate 管理。每一轮记录正在检验的科学变化，并阻止空白、重复或参数完全不变的尝试，促使 AI 从无意义参数消耗转向新的结构假设或 GSAS-II 阶段。
+
+### 跨版本自主审查
+
+复杂问题 reviewer 同时支持旧版 DSH subagent API 与新版 activation API。审查 ledger 会记录实际使用的 backend，识别中英文接管/恢复命令，并在长程自主任务中始终保留用户的最高控制权。
+
+### 绘图数据导出
+
+第七个内置 skill `xrd-plot-export` 可导出全谱 CSV（`2Theta,Iobs,Icalc,Iback,Idiff`）、反射 CSV（`Phase,h,k,l,Mult,d_spacing,2Theta,Icorr`）和统计汇总。它覆盖 GSAS-II 工程、有界引擎 components 与非晶宽峰工作区，结果可直接交给 Origin、Excel、Igor 或自定义脚本绘图。
+
 ### 随包自审计
 
 仓库内置完整性检查、回归套件、真实工具入口测试、负面对照、测试夹具、schema 检查、引擎语法检查和跨工具链验证。
 
 ## 工作流
 
-六个内置 skill 引导 AI 通过五个相互连接的阶段：
+七个内置 skill 引导 AI 通过五个相互连接的阶段：
 
 ```text
 1. 材料识别
@@ -86,7 +128,7 @@ DSH-XRD 可从 Materials Project 与 COD 获取结构，比较不同多晶型，
 |---|---|
 | `xrd_data_io` | 读取、检查、转换、切除、对齐数据，计算 FWHM/Caglioti 项与表观 Scherrer 尺寸 |
 | `xrd_cif_edit` | 读取、编辑、构建、验证、对称化、获取并枚举结构候选 |
-| `cif_to_pcr` | 使用官方 FullProf 转换器生成 PCR，并审计归一占位 |
+| `cif_to_pcr` | 由内置生成器写出完整 FullProf PCR、对齐图谱、记录来源并审计归一占位；外部转换器仅作有记录的 fallback |
 | `xrd_phase_screen` | 根据原始峰或残余峰排序候选物相 |
 | `xrd_refine_auto` | 运行无头 FullProf `fp2k` 自动精修阶梯 |
 | `xrd_refine_manual` | 运行有界、AI 可编辑的 Python/lmfit 引擎 |
@@ -105,7 +147,7 @@ DSH-XRD 可从 Materials Project 与 COD 获取结构，比较不同多晶型，
 |---|---|
 | `lib/` | DSH 工具注册、schema、进程编排、依赖解析与审查逻辑 |
 | `engine/` | 无头 Python 引擎与共享进程守护模块 |
-| `skills/` | 六个工作流和工具使用 skill |
+| `skills/` | 七个工作流和工具使用 skill，包含 `xrd-plot-export` 及其 CSV 导出脚本 |
 | `audit/` | 完整性检查、回归套件、对照和夹具 |
 | `third_party/fullprof/` | 内置 FullProf 二进制、GPL-3 文本、哈希与来源说明 |
 | `INTERFACE.md` | 工具接口契约 |
@@ -132,7 +174,7 @@ python -m pip install numpy scipy PyCifRW pymatgen gemmi lmfit
 | 程序 | 主要职责 | 分发方式 |
 |---|---|---|
 | FullProf `fp2k` | 自动精修与独立验证 | 内置 Windows 与 Linux 版本 |
-| FullProfApp `CIFs_to_PCR.exe` | 官方 CIF 转 PCR | 单独安装 |
+| FullProfApp `CIFs_to_PCR.exe` | 内置生成器拒绝特定 CIF 时的有记录 fallback | 可选单独安装 |
 | GSAS-II | 最终精修、约束、导出与打包 | 单独安装 |
 | Materials Project API | 结构检索 | 可选凭据 |
 | COD | 结构检索 | 无密钥直接访问 |
@@ -200,7 +242,7 @@ node audit/verify-all.mjs
 
 ## 开源协议
 
-DSH-XRD 0.9.1 采用 [GNU General Public License v3](./LICENSE) 开源，GPL-3 覆盖整个仓库。
+DSH-XRD 0.10.2 采用 [GNU General Public License v3](./LICENSE) 开源，GPL-3 覆盖整个仓库。
 
 内置 FullProf 二进制保持第三方原文件不变。其来源、版本、文件大小、SHA-256、源码指针与再分发记录见 [`third_party/fullprof/PROVENANCE.md`](./third_party/fullprof/PROVENANCE.md)。
 
@@ -212,7 +254,7 @@ DSH-XRD 0.9.1 采用 [GNU General Public License v3](./LICENSE) 开源，GPL-3 �
 ### 1. 检查安装包
 
 1. 阅读 `package.json`、本 README 和 `INTERFACE.md`。
-2. 确认 `package.json` 中的版本为 `0.9.1`。
+2. 确认 `package.json` 中的版本为 `0.10.2`。
 3. 确认存在 `lib/`、`engine/`、`skills/`、`audit/` 和 `third_party/fullprof/`。
 4. 定位当前 DSH home 与活动 profile。常见 profile 为 `~/.dsh/profiles/web`；宿主能够提供实际路径时，以宿主信息为准。
 
@@ -254,7 +296,7 @@ python -m pip install numpy scipy PyCifRW pymatgen gemmi lmfit
 ### 4. 解析晶体学程序
 
 - **FullProf 精修：** `third_party/fullprof/` 已内置运行时，`xrd_refine_auto` 和 `xrd_verify_fp2k` 无需另装 `fp2k`。
-- **CIF 转 PCR：** 为 `cif_to_pcr` 定位 FullProfApp 的 `CIFs_to_PCR.exe`。
+- **CIF 转 PCR：** 默认向内置生成器提供 CIF、图谱文件、实测范围和显式波长；只有需要有记录的 fallback 时才定位 FullProfApp 的 `CIFs_to_PCR.exe`。
 - **GSAS-II 最终精修：** 定位包含 `GSASII/GSASIIpath.py` 的可用 GSAS-II 根目录。
 - **晶体库访问：** 需要 Materials Project 检索时配置 `MP_API_KEY`；COD 无需密钥。
 
@@ -338,7 +380,7 @@ node audit/verify-all.mjs
 重启 DSH，使 JavaScript 插件进入运行态。在新会话中：
 
 1. 确认 12 个 XRD 工具全部注册；
-2. 确认 6 个内置 skill 可见；
+2. 确认 7 个内置 skill 可见；
 3. 调用一次轻量数据或 CIF 检查工具；
 4. 汇报最终 Python、GSAS-II、FullProfApp、内置 FullProf 与 Materials Project 配置。
 
@@ -358,6 +400,7 @@ node audit/verify-all.mjs
 用户可以用下面的提示词启动 AI 自主安装：
 
 ```text
-将本仓库中的 DSH-XRD 0.9.1 安装到我当前活动的 DeepSeek Harness profile。如果你是 AI，请从 README.md 的“如果你是 AI”路线开始，依次完成环境检查、依赖配置、插件安装、审计、重启验证，并在需要高权限或安装外部程序时向我申请授权。最后给出完整安装报告。
+将本仓库中的 DSH-XRD 0.10.2 安装到我当前活动的 DeepSeek Harness profile。如果你是 AI，请从 README.md 的“如果你是 AI”路线开始，依次完成环境检查、依赖配置、插件安装、审计、重启验证，并在需要高权限或安装外部程序时向我申请授权。最后给出完整安装报告。
 ```
+
 

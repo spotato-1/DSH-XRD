@@ -83,12 +83,24 @@ console.log('== 1. collected output is read through the host\'s real API ==')
 console.log('== 2. the ledger key matches review.js\' own sanitiser ==')
 {
   check(safeStem('Y2O3_gsas.fxye') === 'Y2O3_gsas', 'stem drops the extension')
-  check(safeStem('a b/c.dat') === 'a_b_c', 'illegal characters collapse to _', JSON.stringify(safeStem('a b/c.dat')))
+  // 0.10.0 (F1 follow-up): `safeStem` carries the DISPLAY identity — it only drops the extension
+  // and leaves every character alone. Sanitising belongs to the FILE NAME, which is derived
+  // separately (`safeKey` → mechPath), so the ledger records the sample as the user named it.
+  check(safeStem('a b/c.dat') === 'a b/c', 'safeStem keeps the sample identity untouched (0.10.0)',
+    JSON.stringify(safeStem('a b/c.dat')))
   check(safeStem('').length === 0 && safeStem(null).length === 0, 'empty input stays empty')
   const dir = fresh('keys')
   const mech = basename(review._internals.mechPath(dir, safeStem('a b/c.dat')))
   check(mech === 'review_mechanical_a_b_c.json',
-    'review.js writes exactly the file safeStem predicts (no third spelling)', mech)
+    'the FILE NAME is the sanitised one (identity and filename are different things)', mech)
+  // the F1 collision fix: a non-ASCII sample keeps a distinct ledger instead of collapsing to `_`
+  const mechAscii = basename(review._internals.mechPath(dir, 'Y2O3'))
+  const mechCjk = basename(review._internals.mechPath(dir, '氧化钇'))
+  const mechCjk2 = basename(review._internals.mechPath(dir, '氧化镧'))
+  check(mechAscii === 'review_mechanical_Y2O3.json',
+    'a pure-ASCII sample keeps the legacy file name (no hash suffix — no ledger migration)', mechAscii)
+  check(mechCjk !== mechCjk2 && mechCjk.endsWith('.json') && mechCjk.includes('__'),
+    'two different non-ASCII samples never share one ledger (F1: identical-name collision)', `${mechCjk} vs ${mechCjk2}`)
   // idempotent: sanitising a ledger key never renames the ledger
   check(safeStem('Y2O3_gsas') === 'Y2O3_gsas', 'safeStem is idempotent on an already-safe key')
 }
@@ -128,8 +140,12 @@ console.log('== 4. one sample keeps ONE ledger across the whole chain ==')
   check(reviewSampleKey({ ...D2, ...C }, dir) === reviewSampleKey({ ...D, ...C }, dir),
     'the bare .dat and the converted .fxye key the SAME sample')
   check(reviewSampleKey(D, dir) === 'Y2O3', 'data stem is used when no CIF is given')
-  check(reviewSampleKey({ ...D2, ...C, sample: 'my sample 2' }, dir) === 'my_sample_2',
-    'an explicit sample wins and is sanitised', String(reviewSampleKey({ ...D2, ...C, sample: 'my sample 2' }, dir)))
+  // 0.10.0: the explicit sample is the ledger's DISPLAY identity — spaces are kept here and only
+  // sanitised when the file name is derived (see §2 above). Asserting `my_sample_2` was the old,
+  // pre-F1 behaviour.
+  check(reviewSampleKey({ ...D2, ...C, sample: 'my sample 2' }, dir) === 'my sample 2',
+    'an explicit sample wins, recorded as given (sanitising is the file name\'s job)',
+    String(reviewSampleKey({ ...D2, ...C, sample: 'my sample 2' }, dir)))
   check(reviewSampleKey({ gpx: 'D:/e2e/gsas_proj.gpx' }, dir) === 'gsas_proj',
     'a gpx with no ledger present keys on the project name')
   writeFileSync(join(dir, 'review_mechanical_Y2O3.json'), '{}')

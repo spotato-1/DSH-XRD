@@ -1,21 +1,52 @@
 # DSH-XRD
 
-[![Version](https://img.shields.io/badge/version-0.9.1-2563eb)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.2-2563eb)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-GPL--3.0-16a34a)](./LICENSE)
 [![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-111827)](./package.json)
 
 **English** | [简体中文](./README.zh-CN.md)
 
-DSH-XRD is an AI-native powder X-ray diffraction and Rietveld refinement plugin for **DeepSeek Harness (DSH)**. It combines 12 native tools, 6 workflow skills, FullProf, a bounded Python engine, and GSAS-II into a complete path from raw diffraction data to refined structures and packaged scientific outputs.
+DSH-XRD is an AI-native powder X-ray diffraction and Rietveld refinement plugin for **DeepSeek Harness (DSH)**. It combines 12 native tools, 7 workflow skills, FullProf, a bounded Python engine, and GSAS-II into a complete path from raw diffraction data to refined structures and packaged scientific outputs.
 
 The plugin is designed for low-intervention, highly automated XRD work. An AI agent can inspect the input, identify phases, retrieve or reconstruct crystal structures, select a refinement route, run staged optimization, revisit competing hypotheses, continue unfinished human projects, and generate final CIFs, figures, reports, and project files.
 
-- **Current release:** 0.9.1
+- **Current release:** 0.10.2
 - **Tool contract:** [`INTERFACE.md`](./INTERFACE.md)
 - **Release history:** [`CHANGELOG.md`](./CHANGELOG.md)
 - **License:** GNU GPL v3
 - **Included runtime:** FullProf `fp2k` for Windows and Linux, with provenance and hashes
 
+## Changes since 0.9.1
+
+**New features:**
+
+- **Plotting-data export — new skill `xrd-plot-export`.** A finished refinement can now be exported
+  as the two plotting CSV families — a full-pattern CSV (`2Theta,Iobs,Icalc,Iback,Idiff`) and a
+  reflection CSV (`Phase,h,k,l,Mult,d_spacing,2Theta,Icorr`) — plus a `_stats_summary.csv`, so results
+  can be plotted in Origin, Excel, Igor, or custom scripts. It reads GSAS-II projects, bounded-engine
+  components, and amorphous-hump workspaces directly, so a manual-engine result (which has no GSAS
+  project) can finally be plotted. This is the seventh bundled skill.
+- **In-tree CIF→PCR generation.** `cif_to_pcr` now writes the complete FullProf PCR itself; the
+  third-party `CIFs_to_PCR.exe` is only a recorded fallback, never a silent handover.
+- **Hypothesis-driven escalation.** `xrd_refine_manual` gains a machine-readable gate that blocks
+  blank, repeated, or unchanged manual rounds, steering the agent from parameter grinding toward a
+  new structural hypothesis or the GSAS-II stage.
+
+**Fixes:**
+
+- **The complex-case reviewer now works on both DSH host generations.** A host upgrade
+  (`dsh-subagent 0.2.1-rc.2`) had silently turned the reviewer into a no-op — no crash, no warning,
+  no review. `lib/subagent-bridge.js` feature-detects the host's subagent entry point and maps the
+  request; the ledger now records which backend ran it.
+- **The takeover detector now listens in both languages.** It previously recognized Chinese only, so
+  an English user could never re-enable a closed detector or lift a soft freeze; both regexes now
+  accept English as well.
+- **The entry gate no longer refuses the plugin's own output**, the driver now tolerates the two
+  writers' differing comment conventions, and the success path now actually populates the
+  `provenance` field it declared.
+- **Chinese sample names no longer collide** into a single shared ledger.
+
+Tool count stays **12**; skills go **6 → 7**. Per-item evidence grades are in `CHANGELOG.md`.
 
 ## Core Advantages
 
@@ -55,13 +86,29 @@ The plugin can continue existing FullProf PCR files and GSAS-II GPX projects. A 
 
 A converged project can be packaged with clean GPX files, refinement logs, phase CIFs, fit figures, residual panels, reflection ticks, hkl labels, Markdown reports, metrics, and manifests.
 
+### Traceable PCR generation and guarded refinement
+
+The default CIF-to-PCR path is now implemented inside DSH-XRD. It writes the full pattern block, aligns FullProf data, supports portable names, audits occupancy normalization, and creates a SHA-256-bound provenance sidecar. `xrd_refine_auto` and `xrd_verify_fp2k` check that lineage before processing a PCR, while explicitly confirmed user PCR files can enter through a recorded user-provided origin.
+
+### Hypothesis-driven escalation
+
+Repeated manual-engine calls are governed by a machine-readable hypothesis gate. Each run records what scientific change is being tested and blocks blank, repeated, or unchanged attempts, helping the agent move from parameter grinding to a new structural hypothesis or the GSAS-II stage.
+
+### Cross-version autonomous review
+
+The complex-case reviewer supports both legacy DSH subagents and the newer activation API. Its review ledger records the backend used, recognizes Chinese and English takeover/resume commands, and keeps the user in control throughout long-running autonomous work.
+
+### Plotting-data export
+
+The seventh bundled skill, `xrd-plot-export`, exports a complete pattern CSV (`2Theta,Iobs,Icalc,Iback,Idiff`), a reflection CSV (`Phase,h,k,l,Mult,d_spacing,2Theta,Icorr`), and a statistics summary. It works with GSAS-II projects, bounded-engine components, and amorphous-hump workspaces, so results can be plotted in Origin, Excel, Igor, or custom scripts.
+
 ### Self-auditing release
 
 The repository ships integrity checks, regression suites, real tool-entry tests, negative controls, fixtures, schema checks, engine syntax checks, and cross-tool chain verification.
 
 ## Workflow
 
-The six bundled skills guide the AI through five connected stages:
+The seven bundled skills guide the AI through five connected stages:
 
 ```text
 1. Material identification
@@ -86,7 +133,7 @@ Stages can be revisited as new evidence appears. Projects with three or more pha
 |---|---|
 | `xrd_data_io` | Read, inspect, convert, cut, align, measure FWHM, derive Caglioti terms, and estimate apparent Scherrer size |
 | `xrd_cif_edit` | Read, edit, build, validate, symmetrize, fetch, and enumerate structural candidates |
-| `cif_to_pcr` | Convert CIF with the official FullProf converter and audit normalized occupancies |
+| `cif_to_pcr` | Generate a complete FullProf PCR in-tree, align the pattern, record provenance, and audit normalized occupancies; use the external converter only as a recorded fallback |
 | `xrd_phase_screen` | Rank candidate phases against raw or residual peaks |
 | `xrd_refine_auto` | Run the headless FullProf `fp2k` automatic refinement ladder |
 | `xrd_refine_manual` | Run the bounded, AI-editable Python/lmfit engine |
@@ -105,7 +152,7 @@ Exact parameters, defaults, and return schemas are documented in [`INTERFACE.md`
 |---|---|
 | `lib/` | DSH registration, tool schemas, process orchestration, dependency resolution, and review logic |
 | `engine/` | Headless Python engines and shared process guards |
-| `skills/` | Six workflow and tool-usage skills |
+| `skills/` | Seven workflow and tool-usage skills, including `xrd-plot-export` and its CSV exporter |
 | `audit/` | Integrity checks, regression suites, controls, and fixtures |
 | `third_party/fullprof/` | Bundled FullProf binaries, GPL-3 text, hashes, and provenance |
 | `INTERFACE.md` | Tool interface contract |
@@ -132,7 +179,7 @@ python -m pip install numpy scipy PyCifRW pymatgen gemmi lmfit
 | Program | Main role | Distribution |
 |---|---|---|
 | FullProf `fp2k` | Automatic refinement and independent verification | Bundled for Windows and Linux |
-| FullProfApp `CIFs_to_PCR.exe` | Official CIF-to-PCR conversion | Installed separately |
+| FullProfApp `CIFs_to_PCR.exe` | Recorded fallback for CIF cases rejected by the in-tree generator | Optional separate installation |
 | GSAS-II | Final refinement, constraints, export, and packaging | Installed separately |
 | Materials Project API | Structure retrieval | Optional credential |
 | COD | Structure retrieval | Direct access without a key |
@@ -200,7 +247,7 @@ The integrity gate verifies tool assembly, engine availability and syntax, actio
 
 ## License
 
-DSH-XRD 0.9.1 is distributed under the [GNU General Public License v3](./LICENSE). The license covers the repository as a whole.
+DSH-XRD 0.10.2 is distributed under the [GNU General Public License v3](./LICENSE). The license covers the repository as a whole.
 
 The bundled FullProf binaries remain unchanged third-party files. Their origin, versions, file sizes, SHA-256 hashes, source pointer, and redistribution record are documented in [`third_party/fullprof/PROVENANCE.md`](./third_party/fullprof/PROVENANCE.md).
 
@@ -212,7 +259,7 @@ Note: It is recommended to download the complete structured package directly fro
 ### 1. Inspect the package
 
 1. Read `package.json`, this README, and `INTERFACE.md`.
-2. Confirm that `package.json` reports version `0.9.1`.
+2. Confirm that `package.json` reports version `0.10.2`.
 3. Confirm that these directories exist: `lib/`, `engine/`, `skills/`, `audit/`, and `third_party/fullprof/`.
 4. Locate the active DSH home and active profile. The conventional profile is `~/.dsh/profiles/web`, but use the path reported by the running DSH environment when available.
 
@@ -254,7 +301,7 @@ Record the interpreter path selected for DSH-XRD. Python 3.13 64-bit with NumPy 
 ### 4. Resolve crystallographic programs
 
 - **FullProf refinement:** use the bundled runtime in `third_party/fullprof/`. No separate `fp2k` installation is needed for `xrd_refine_auto` or `xrd_verify_fp2k`.
-- **CIF-to-PCR conversion:** locate FullProfApp's `CIFs_to_PCR.exe` for `cif_to_pcr`.
+- **CIF-to-PCR conversion:** use the in-tree generator by supplying the CIF, pattern file, measured range, and explicit wavelength. Locate FullProfApp's `CIFs_to_PCR.exe` only when the recorded fallback is needed.
 - **Final GSAS-II refinement:** locate a working GSAS-II installation whose root contains `GSASII/GSASIIpath.py`.
 - **Crystal database access:** configure `MP_API_KEY` when Materials Project retrieval is wanted. COD access is available without a key.
 
@@ -338,7 +385,7 @@ The audit reports unavailable external inputs as `SKIP`, making the installed co
 Restart DSH so the JavaScript plugin is loaded. In the new session:
 
 1. confirm that all 12 `xrd_*`/XRD tools are registered;
-2. confirm that the six bundled skills are visible;
+2. confirm that the seven bundled skills are visible;
 3. call a lightweight data or CIF inspection tool;
 4. report the final Python, GSAS-II, FullProfApp, FullProf runtime, and Materials Project configuration.
 
@@ -358,6 +405,7 @@ Report:
 A user can start the autonomous route with this prompt:
 
 ```text
-Install DSH-XRD 0.9.1 from this repository into my active DeepSeek Harness profile. If you are an AI, follow the “If You Are an AI” route in README.md from environment inspection through restart verification. Ask for approval when elevated execution or external installation is required, and finish with a complete installation report.
+Install DSH-XRD 0.10.2 from this repository into my active DeepSeek Harness profile. If you are an AI, follow the “If You Are an AI” route in README.md from environment inspection through restart verification. Ask for approval when elevated execution or external installation is required, and finish with a complete installation report.
 ```
+
 

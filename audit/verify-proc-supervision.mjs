@@ -21,7 +21,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { python, pluginRoot } from './_lib.mjs'
+import { python, pluginRoot, copyPcrWithProvenance, writeProvenanceFor } from './_lib.mjs'
 
 const require = createRequire(import.meta.url)
 
@@ -351,7 +351,11 @@ const throwingSvc = { spawn() { throw new Error('boom from the host service') } 
 let svcRes = null
 try {
   svcRes = await runEngine(PY, [tickerEngine, '--out', join(workD, 'r2.json')], workD, {
-    timeoutMs: 10_000, backend: 'engine', outDir: workD,
+    // The ticker engine runs 12 × 0.4 s ≈ 4.8 s plus python startup. 10 s was enough on an idle
+    // machine and NOT enough inside the full audit run (2026-11-07: this was the one flaky
+    // assertion of verify-all — `code === 0` failed under load). 30 s keeps the control
+    // deterministic without weakening what it asserts.
+    timeoutMs: 30_000, backend: 'engine', outDir: workD,
     ctx: { get: (k) => (k === 'subprocess' ? throwingSvc : null) },
   })
 } catch (e) { svcRes = { error: String(e?.message ?? e) } }
@@ -441,7 +445,8 @@ console.log('== 12. xrd_verify_fp2k refuses a stale .sum (0.8.4) ==')
     const staleBytes = 'density (volumic mass) of phase 1 is: 1.234\n=> Cell parameters :\n     9.876\nRwp: 3.21\nBragg R-factor: 1.11\n'
     writeFileSync(join(scratch, `${stem}.sum`), staleBytes)
     const pcrLocal = join(workF, `${stem}.pcr`)
-    copyFileSync(pcrSrc, pcrLocal)          // deliberately NO .dat next to it ⇒ fp2k cannot refine
+    // sidecar carried (0.10.0 entry gate); the .dat is still deliberately absent ⇒ fp2k cannot refine
+    copyPcrWithProvenance(pcrSrc, pcrLocal)
     let vr = null
     let vthrew = null
     try {
@@ -494,7 +499,10 @@ console.log('== 13. TOOL level: a cancelled xrd_refine_manual reports aborted, n
   const t0 = Date.now()
   let res = null, threw = null
   try {
-    res = await manualTool.execute({ data: dataG, out_dir: workG, engine: hangG },
+    res = await manualTool.execute({ data: dataG, out_dir: workG, engine: hangG,
+      // 0.10.0 D gate: xrd_refine_manual refuses a run without a hypothesis before it even
+      // builds a plan, so this cancellation control has to declare one.
+      hypothesis: 'audit: cancelling a running refinement must report aborted, not a timeout' },
       { agent: { session: { header: { cwd: workG } } }, callId: 'abort-tool', signal: ac.signal })
   } catch (e) { threw = e }
   const dt = Date.now() - t0
@@ -715,7 +723,7 @@ console.log('== 19. xrd_verify_fp2k reports the LAST Rwp, like the driver does (
   if (!existsSync(pcrSrc) || !existsSync(datSrc)) {
     skip('the last-Rwp control: audit/fixtures/Y2O3.{pcr,dat} are not both present')
   } else {
-    copyFileSync(pcrSrc, join(workM, 'Y2O3.pcr'))
+    copyPcrWithProvenance(pcrSrc, join(workM, 'Y2O3.pcr'))
     copyFileSync(datSrc, join(workM, 'Y2O3.dat'))
     let vr = null, vthrew = null
     try {
@@ -789,7 +797,8 @@ console.log('== 20. the wrapper cannot turn an engine\'s ok:false into success (
   ].join('\n'))
   let res = null, threw = null
   try {
-    res = await manualTool.execute({ data: dataN, out_dir: workN, engine: engN },
+    res = await manualTool.execute({ data: dataN, out_dir: workN, engine: engN,
+      hypothesis: 'audit: an engine that reports ok=false keeps its numeric Rwp and its own error' },
       { agent: { session: { header: { cwd: workN } } }, callId: 'okfalse', signal: undefined })
   } catch (e) { threw = e }
   ok(threw === null, `the call returns a value (${threw ? String(threw.message).slice(0, 80) : 'ok'})`)
@@ -806,13 +815,17 @@ console.log('== 21. an explicit plan that does not exist is REPORTED (0.8.6) =='
     get: () => ({ request: async () => ({ granted: true }) }),
   })
   const workO = join(WORK, 'missing-plan'); mkdirSync(workO, { recursive: true })
+  // 0.10.0 D gate: two runs in one ledger with the same stage/vary set are refused as
+  // "identical_change" before the plan is read, so (b) gets its own directory.
+  const workO2 = join(WORK, 'missing-plan-b'); mkdirSync(workO2, { recursive: true })
   const dataO = join(workO, 'data.dat')
   writeFileSync(dataO, '10.0 100\n10.5 120\n11.0 90\n')
   const missing = join(workO, 'nope_plan.json')
   // (a) plan only → used to die in resolve(undefined) with a bare Node TypeError
   let e1 = null
   try {
-    await manualTool.execute({ plan: missing },
+    await manualTool.execute({ plan: missing,
+      hypothesis: 'audit: an explicit plan that does not exist must be named, not crash' },
       { agent: { session: { header: { cwd: workO } } }, callId: 'p1', signal: undefined })
   } catch (e) { e1 = e }
   ok(e1 !== null && /plan not found/.test(String(e1.message || '')),
@@ -820,8 +833,9 @@ console.log('== 21. an explicit plan that does not exist is REPORTED (0.8.6) =='
   // (b) plan + data → used to silently IGNORE the plan and run a default one
   let e2 = null
   try {
-    await manualTool.execute({ plan: missing, data: dataO },
-      { agent: { session: { header: { cwd: workO } } }, callId: 'p2', signal: undefined })
+    await manualTool.execute({ plan: missing, data: dataO, out_dir: workO2,
+      hypothesis: 'audit: plan+data must not silently ignore a missing plan and run a default one' },
+      { agent: { session: { header: { cwd: workO2 } } }, callId: 'p2', signal: undefined })
   } catch (e) { e2 = e }
   ok(e2 !== null && /plan not found/.test(String(e2.message || '')),
     `plan+data is NOT silently ignored either (${e2 ? String(e2.message).slice(0, 70) : 'no throw'})`)
@@ -1025,6 +1039,12 @@ console.log('== 23. the fourth review\'s blockers, as controls (0.8.7) ==')
       const pcr = join(escDir, 'esc.pcr')
       writeFileSync(pcr, readFileSync(fxPcr, 'utf8') + '\n../escaped-copy.dat\n')
       copyFileSync(fxDat, join(escDir, 'esc.dat'))
+      // 0.10.0 entry gate: this pcr is MUTATED by the test, so the fixture's sidecar no longer
+      // matches its bytes — record the new bytes so the run reaches the escape check instead of
+      // dying at the gate (the gate's own refusals have their own controls).
+      if (!writeProvenanceFor(pcr, { cif: join(HERE, 'fixtures', 'Y2O3.cif') })) {
+        skip('the pcr-escape control: could not record provenance for the mutated fixture')
+      }
       const idx = await import(pathToFileURL(join(ROOT, 'lib', 'index.js')).href)
       const tset = []
       await (idx.apply ?? idx.default)({

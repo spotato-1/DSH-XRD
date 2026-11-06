@@ -15,7 +15,7 @@
 //     then probed, and only THEN falls back to a clear error telling you what to set.
 //
 // Nothing here is allowed to contain a machine-specific literal.
-import { existsSync, readFileSync, statSync, rmSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, rmSync, mkdirSync, copyFileSync } from 'node:fs'
 import { dirname, join, resolve, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -287,6 +287,52 @@ export function execIn(cwd) {
 
 export function isDir(p) {
   try { return statSync(p).isDirectory() } catch { return false }
+}
+
+/**
+ * Copy a fixture `.pcr` **together with its provenance sidecar**.
+ *
+ * 0.10.0 added the entry gate (`xrd_refine_auto` / `xrd_verify_fp2k` refuse a pcr whose provenance
+ * cannot be vouched for). The shipped fixtures therefore carry a `.provenance.json` of their own
+ * (kind=generated), and every test that stages a fixture into a work dir must carry it along —
+ * copying only the pcr was what made six suites fail on their own product.
+ *
+ * The sidecar pins the pcr's sha256, so it stays valid across a plain byte copy; if a suite WANTS
+ * an untraceable pcr (reverse controls), copy the file itself and leave the sidecar behind.
+ *
+ * @param {string} srcPcr source fixture pcr
+ * @param {string} dstPcr destination pcr (sidecar named `<dstPcr>.provenance.json`)
+ * @returns {boolean} whether a sidecar was carried over
+ */
+export function copyPcrWithProvenance(srcPcr, dstPcr) {
+  copyFileSync(srcPcr, dstPcr)
+  const srcSidecar = `${srcPcr}.provenance.json`
+  if (!existsSync(srcSidecar)) return false
+  copyFileSync(srcSidecar, `${dstPcr}.provenance.json`)
+  return true
+}
+
+/**
+ * Write a fresh `kind=generated` provenance sidecar for a pcr the test itself authored
+ * (e.g. a deliberately mutated fixture). The sidecar pins the CURRENT bytes, so this must run
+ * AFTER the mutation and before the gated tool is called.
+ *
+ * @param {string} pcrPath pcr to record
+ * @param {{cif?: string, pluginRootHint?: string}} [opts]
+ * @returns {boolean} whether the sidecar was written
+ */
+export function writeProvenanceFor(pcrPath, opts = {}) {
+  const script = join(pluginRoot(), 'engine', 'pcr_provenance.py')
+  if (!existsSync(script)) return false
+  const args = [script, 'write', '--pcr', pcrPath, '--kind', 'generated',
+    '--generator-name', 'audit-fixture', '--generator-version', 'mutated-in-audit', '--force']
+  if (opts.cif) args.push('--cif', opts.cif)
+  try {
+    execFileSync(python(), args, { stdio: 'pipe' })
+    return existsSync(`${pcrPath}.provenance.json`)
+  } catch {
+    return false
+  }
 }
 
 export { basename, join, resolve, dirname, existsSync }
